@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<head>
+<title>Social Networks Analysis Project</title>
+<style>
+
+#container {
+	padding-left: 100px;
+	padding-right: 100px;
+}
+
+h1, h3, p {
+	font-family: sans-serif;
+}
+
+.node {
+  stroke: #fff;
+  stroke-width: 1.5px;
+	/*opacity: 0.8;*/
+}
+
+.link {
+  stroke: #999;
+  stroke-opacity: .6;
+}
+
+#graphTitle {
+	text-align: center;
+}
+
+#svg, #svgplot {
+	display: block;
+	margin: 0 auto;
+}
+
+.domain, .axis line  {
+	fill: none; 
+	stroke: black;
+	stroke-width: 1px;
+	shape-rendering: crispEdges;
+}
+
+</style>
+</head>
+<body>
+<script src="d3.v3.min.js"></script>
+<script src="graph.js"></script> <!-- Not included in this repository -->
+<script src="pagerank.js"></script>
+<script src="regression.js"></script> <!-- Not included in this repository -->
+<div id="container">
+<h1>Social Networks Analysis Project</h1>
+<p>Chris Stadler</p>
+<h3 id="graphTitle">Jobs Network</h3>
+<div id="dropdown">
+	Select a network:
+</div>
+<div id="visualizations"></div>
+<script>
+
+// Networks in dataset
+var graphList = ["Jobs", "Wellness","All","FoodSource", "Alcohol", "TraditionalKnowledge"]
+
+// Network to display on load
+var network = graphList[0]
+
+// Dropdown to select network
+var networkMenu = d3.select("#dropdown")
+	.append("select")
+	.attr("id", "networkMenu")
+	.selectAll("option")
+	.data(graphList)
+	.enter()
+	.append("option")
+	.text(function(d) {return d})
+
+
+var width = 800,
+    height = 800;
+
+// Name of variable (income) in csv
+var columnname = "Estimated Household Monthly Income (773)";
+
+var color = d3.scale.linear()
+	.domain([0,1250]) // specific to income
+	.range([d3.rgb(255,237,160),d3.rgb(240,59,32)]); // from colorbrewer2
+
+// Init force layout
+var force = d3.layout.force()
+	.gravity(0.1)
+    .charge(-40)
+    .linkDistance(50)
+    .size([width, height]);
+
+var drawGraph = function(graphname) {
+
+	// svg for graph
+	var svg = d3.select("#visualizations").append("svg")
+		.attr("id", "svg")
+		.attr("width", width)
+		.attr("height", height);
+
+	// Read in json and draw graph (adapted from http://bl.ocks.org/mbostock/4062045)
+	d3.json(graphname, function(error, json) {
+
+		if (error) return console.warn(error);
+
+		var graph = makeGraph(json);
+		//console.log(graph);
+		calculatePageRank(graph);
+		console.log(graphname, " N = ",graph.names.length);
+		var vizGraph  = graph.makeVizGraph(); 
+
+		force
+	    	.nodes(vizGraph.nodes)
+	    	.links(vizGraph.links)
+	    	.start();
+
+		var radius = d3.scale.linear()
+			.domain([0, 10/graph.names.length])
+			.range([3, 12]);
+
+		var link = svg.selectAll(".link")
+		  .data(vizGraph.links)
+		.enter().append("line")
+		  .attr("class", "link")
+		  .style("stroke-width", function(d) { return Math.sqrt(1.5*d.value); });
+
+		// get incomes before drawing nodes
+		d3.tsv("data/vectors.txt", function(tsv) {
+			for (var i=0; i<tsv.length; i++) {
+				var name = tsv[i].Label;
+				var income = +tsv[i][columnname];
+				if (income > 99999) { // Missing value
+					income = undefined;
+				}
+				if (graph.getNode(name)) {
+					graph.getNode(name).income = income;
+				}
+			}
+		
+			  var node = svg.selectAll(".node")
+				  .data(vizGraph.nodes.sort(function(a, b) { // draw in order of pagerank (small to large)
+						return a.getPageRank() - b.getPageRank();
+					}))
+				.enter().append("circle")
+				  .attr("class", "node")
+				  .attr("r", function(d) {return radius(d.pagerank); })
+				  .style("fill", function(d) {return color(graph.getNode(d.name).income); })
+				  .call(force.drag);
+		
+		  node.append("title")
+			  .text(function(d) { return "ID: " + d.name + ", income: " + graph.getNode(d.name).income; });
+
+	  force.on("tick", function() {
+	    link.attr("x1", function(d) { return d.source.x; })
+		.attr("y1", function(d) { return d.source.y; })
+		.attr("x2", function(d) { return d.target.x; })
+		.attr("y2", function(d) { return d.target.y; });
+
+	    node.attr("cx", function(d) { return d.x; })
+		.attr("cy", function(d) { return d.y; });
+		//if (force.alpha() < 0.03) {force.stop();}
+
+		d3.select("#networkMenu").on("change", selectNetwork) // Update graph if a new network is selected
+
+		});
+		draw_plot(graph.getNodes("income")); // draw scatterplot
+	  });
+	});
+}
+
+// Draw initial graph
+drawGraph("data/" + network + ".json");
+
+// If menu is changed
+var selectNetwork = function() {
+	network = graphList[d3.event.target.selectedIndex];
+	var graphname = "data/" + network + ".json";
+	console.log(graphname);
+	d3.select("#graphTitle")
+		.text(network + " Network")
+
+	d3.select("#svg").remove();
+	d3.select("#svgplot").remove();
+	drawGraph(graphname);
+}
+
+// Draw a scatterplot
+var draw_plot = function(dataset) {
+	//console.log(dataset);
+	var w = 700;
+	var h = 500;
+	var pad = 60;
+	var x = "pagerank";
+	var y = "income";
+
+	// svg for scatterplot
+	var svgplot = d3.select("#visualizations").append("svg")
+		.attr("id", "svgplot")
+		.attr("width", w).attr("height", h);
+
+	var xScale = d3.scale.linear()
+             	.domain([0, d3.max(dataset,function(d){ 
+			return d[x];})])
+             	.range([pad, w-pad]);
+	var yScale = d3.scale.linear()
+		.domain([0, d3.max(dataset, function(d) {
+			return d[y]})])
+		.range([h-pad, pad]);
+	var xAxis = d3.svg.axis()
+		.scale(xScale)
+		.orient("bottom");
+	var yAxis = d3.svg.axis()
+		.scale(yScale)
+		.orient("left");
+	svgplot.append("g").selectAll("circle")
+		.data(dataset).enter().append("circle")
+		.attr("cx", function(d) {
+			return xScale(d[x]);})
+		.attr("cy", function(d) {
+			return yScale(d[y]);})
+		.attr("r", 3)
+		.attr("opacity", .5)
+		.append("title")
+  			.text(function(d) { return "ID: " + d.name + ", income: " + d.income; });
+	svgplot.append("g")
+		.attr("class", "axis")
+		.attr("transform", "translate(0," + (h - pad) + ")")
+		.call(xAxis);
+	svgplot.append("g")
+		.attr("class", "axis")
+		.attr("transform", "translate(" + pad + ",0)")
+		.call(yAxis);
+	svgplot.append("text")
+		.attr("class", "label")
+		.attr("x", w/3)
+		.attr("y", h - (pad/4))
+		.text(x);
+	svgplot.append("text")
+		.attr("class", "label")
+		.attr("x", -3*h/4)
+		.attr("y", pad/4)
+		.attr("transform", "rotate(-90)")
+		.text(y);
+	
+	var regression = LeastSquares(dataset, x, y);
+	xmax = d3.max(dataset, function(d) {return d[x]})
+	svgplot.append("line")
+		.attr("x1", xScale(0)).attr("y1", yScale(regression.b))
+		.attr("x2", xScale(xmax)).attr("y2", yScale(xmax * regression.m + regression.b))
+		.attr("stroke", d3.rgb(254,178,76))
+		.attr("stroke-width", 2)
+
+	svgplot.append("text")
+		.attr("class", "label")
+		.attr("x", pad + 20)
+		.attr("y", pad - 20)
+		.text("R^2 = " + regression.r2);
+}
+</script>
+
+<p>Force directed graph visualization adapted from <a href="http://bl.ocks.org/mbostock/4062045">mbostock's force directed graph</a>.</p>
+<p>Coloring from <a href="http://colorbrewer2.org">ColorBrewer 2.0</a></p>
+</div>
+</body>
